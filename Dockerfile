@@ -6,6 +6,7 @@ ENV WEB_CONCURRENCY="1"
 ENV TIMEOUT="3600"
 ENV GRACEFUL_TIMEOUT="3600"
 ENV TF_ENABLE_ONEDNN_OPTS="0"
+ENV JAVA_HOME="./app/Java/jdk-19/bin/java.exe"
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 
