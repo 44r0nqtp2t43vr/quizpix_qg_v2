@@ -10,3 +10,4 @@ sentencepiece
 rake-nltk
 unidecode
 tensorflow
+requests

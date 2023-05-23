@@ -6,6 +6,7 @@ from typing import List
 import re
 import nltk
 import torch
+import requests
 import random
 import numpy as np
 import tensorflow as tf
@@ -60,24 +61,14 @@ def get_sentences_with_keywords(sentences, keywords):
                 keyword_sentences.append(sentence)
     return list(set(keyword_sentences))
 
+# defining the api-endpoint 
+API_ENDPOINT = "https://8cy7cvl9mi.execute-api.ap-southeast-1.amazonaws.com/dev/entities"
+
 grammar = r"""
-    NAME: 
-        {<NNP><NNP>+<VB|VBD|MD|CC>}
-        {<VB|VBD|MD|CC><NNP><NNP>+}
-        {<IN><NNP><NNP>+^<,>}
-        {<NN|JJ><NNP><NNP>+}
-        }<VB|VBD|MD|IN|NN|JJ|CC>{
-    PTHING:
-        {<DT><NNP|NNPS>+<VB|VBD|MD>}
-        {<VB|VBD|MD><DT>?<NNP|NNPS>+}
-        {<IN>?<DT>?<NNP|NNPS>+<FW><NNP|NNPS>}
-        {<IN><DT>?<NNP|NNPS>+^<,>}
-        {<DT><NNP|NNPS>+}
-        }<DT|VB|VBD|MD|IN>{
     THING:
         {<DT>?<NN|NNS>+<VB|VBD|MD>}
         {<VB|VBD|MD><DT>?<NN|NNS>+}
-        {<IN><DT>?<NN|NNS>+^<,>}
+        {<IN><DT>?<NN|NNS>+}
         }<DT|VB|VBD|MD|IN>{
     DIGIT:
         {<CD>}
@@ -88,7 +79,8 @@ def chunk(sentences):
     keywords_dict = {
         'name': [],
         'year': [],
-        'pother': [],
+        'location': [],
+        'org': [],
         'other': [],
     }
 
@@ -98,41 +90,41 @@ def chunk(sentences):
         cp = nltk.RegexpParser(grammar)
         chunk_tree = cp.parse(tagged_text)
 
-        names_check_list = []
-        check_results = nltk.ne_chunk(tagged_text)
-        for result in check_results:
-            if isinstance(result, nltk.tree.Tree):
-                if result.label() == 'PERSON':
-                    names_check_list = names_check_list + [word[0] for word in result.leaves()]
-        
         answer_dict = {
             'name': [],
             'year': [],
-            'pother': [],
+            'location': [],
+            'org': [],
             'other': [],
             'answer': [],
         }
 
+        # data to be sent to api
+        data = {
+            "text": sentence,
+        }
+
+        # sending post request and saving response as response object
+        r = requests.post(url=API_ENDPOINT, json=data)
+
+        # extracting data in json format
+        res = r.json()
+
+        if 'PERSON' in res.keys():
+            answer_dict['name'] = [item['name'] for item in res['PERSON'] if len(item['name'].split()) >= 2]
+        if 'ORGANIZATION' in res.keys():
+            answer_dict['org'] = [item['name'].replace(" 's", "'s") if " 's" in item['name'] else item['name'] for item in res['ORGANIZATION']]
+        if 'LOCATION' in res.keys():
+            answer_dict['location'] = [item['name'].replace(" 's", "'s") if " 's" in item['name'] else item['name'] for item in res['LOCATION']]
+
         for n in chunk_tree:
             if isinstance(n, nltk.tree.Tree):               
-                if n.label() == 'NAME':
-                    name_list = [word[0] for word in n.leaves()]
-                    if any((True for word in name_list if word in names_check_list)):
-                        answer_dict['name'].append(" ".join(name_list))
-                    else:
-                        answer_dict['other'].append(" ".join(name_list))
-                    continue
-                elif n.label() == 'DIGIT':
+                if n.label() == 'DIGIT':
                     years = [word[0] for word in n.leaves() if word[0].isdigit() and len(word[0]) == 4 and int(word[0]) <= 2025]
                     if len(years) > 0:
                         answer_dict['year'].append(" ".join(years))
-                    continue
-                elif n.label() == 'PTHING':
-                    pothers = [word[0] for word in n.leaves() if len(word[0]) >= 3]
-                    if len(pothers) > 0 and not any((True for word in pothers if word in names_check_list)):
-                        answer_dict['pother'].append(" ".join(pothers))
-                others = [word[0] for word in n.leaves() if len(word[0]) >= 3]
-                if len(others) > 0 and not any((True for word in others if word in names_check_list)):
+                else:
+                    others = [word[0] for word in n.leaves() if len(word[0]) >= 3]
                     answer_dict['other'].append(" ".join(others))
                 
         
@@ -142,10 +134,14 @@ def chunk(sentences):
         if len(answer_dict['year']) > 0:
             answer_dict['answer'].append(answer_dict['year'])
             keywords_dict['year'].append(answer_dict['year'])
-        if len(answer_dict['pother']) > 0:
+        if len(answer_dict['location']) > 0:
             if len(answer_dict['answer']) == 0:
-                answer_dict['answer'] = [[answer_dict['pother'][random.randint(0, len(answer_dict['pother'])-1)]]]
-            keywords_dict['pother'].append(answer_dict['pother'])
+                answer_dict['answer'] = [[answer_dict['location'][random.randint(0, len(answer_dict['location'])-1)]]]
+            keywords_dict['location'].append(answer_dict['location'])
+        if len(answer_dict['org']) > 0:
+            if len(answer_dict['answer']) == 0:
+                answer_dict['answer'] = [[answer_dict['org'][random.randint(0, len(answer_dict['org'])-1)]]]
+            keywords_dict['org'].append(answer_dict['org'])
         if len(answer_dict['other']) > 0:
             if len(answer_dict['answer']) == 0:
                 answer_dict['answer'] = [[answer_dict['other'][random.randint(0, len(answer_dict['other'])-1)]]]
@@ -217,6 +213,8 @@ def get_distractors(question, answer, keywords_dict):
     distractors = []
     random.shuffle(keywords_dict['name'])
     random.shuffle(keywords_dict['year'])
+    random.shuffle(keywords_dict['location'])
+    random.shuffle(keywords_dict['org'])
     random.shuffle(keywords_dict['other'])
     if answer in keywords_dict['name']:
         for name in keywords_dict['name']:
@@ -234,18 +232,35 @@ def get_distractors(question, answer, keywords_dict):
             rand_year = str(int(keywords_dict['year'][random.randint(0, len(keywords_dict['year'])-1)]) - random.randrange(-10, 10))
             if rand_year not in distractors:
                 distractors.append(rand_year)
-    elif answer in keywords_dict['pother']:
-        for pother in keywords_dict['pother']:
-            if pother != answer and pother not in question.split():
-                distractors.append(pother)
+        return distractors
+    if answer in keywords_dict['location']:
+        for location in keywords_dict['location']:
+            if location != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, location)) and location not in question.rstrip('?:!.,;').split():
+                distractors.append(location)
             if len(distractors) >= 3:
                 return distractors
-    if len(distractors) < 3:
+    if answer in keywords_dict['org']:
+        for org in keywords_dict['org']:
+            if org != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, answer)) and org not in question.rstrip('?:!.,;').split():
+                distractors.append(org)
+            if len(distractors) >= 3:
+                return distractors
+    if answer in keywords_dict['other']:
         for other in keywords_dict['other']:
-            if other != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, other)) and other not in question.split():
+            if other != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, other)) and other not in question.rstrip('?:!.,;').split():
                 distractors.append(other)
             if len(distractors) >= 3:
-                break
+                return distractors
+    for other in keywords_dict['org'] + keywords_dict['name'] + keywords_dict['location']:
+        if other != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, other)) and other not in question.rstrip('?:!.,;').split():
+            distractors.append(other)
+        if len(distractors) >= 3:
+            return distractors
+    for other in keywords_dict['other']:
+        if other != answer and not any(dist < 5 for dist in get_levenshtein_dists(distractors, other)) and other not in question.rstrip('?:!.,;').split():
+            distractors.append(other)
+        if len(distractors) >= 3:
+            return distractors
     return distractors
 
 def get_fill_in_the_blanks(answers_sentences):
@@ -326,15 +341,20 @@ def falsify_sentence(sentence):
         top_p = 0.80,
         top_k = 30,
         repetition_penalty = 10.0,
-        num_return_sequences = 1
+        num_return_sequences = 4
     )
-    
+
     #decode generated sentences
     gen_sentences = []
-    for index, sample_output in enumerate(sample_outputs):
+    for sample_output in sample_outputs:
         decoded_sentence = GPT2tokenizer.decode(sample_output, skip_special_tokens = True)
         final_sentence = tokenize.sent_tokenize(decoded_sentence)[0]
-        return final_sentence
+        tagged_final_sentence = nltk.pos_tag(word_tokenize(final_sentence))
+        fs_tags = [word[1] for word in tagged_final_sentence]
+        if (fs_tags[-1] == 'NN' or fs_tags[-1] == 'NNS') and len(final_sentence.split()) > len(sentence.split()):
+            return final_sentence
+        gen_sentences.append(final_sentence)
+    return gen_sentences[0]
 
 def generate_quiz(text):
     text = text.replace(',', '')
@@ -392,6 +412,6 @@ def index():
 @app.post("/generatequiz", response_model=QuestionResponse)
 def getquestion(request: QuestionRequest):
     text = request.text
-    quiz = generate_quiz(text)
+    quiz = generate_quiz(unidecode(text))
 
     return QuestionResponse(quiz=quiz)
